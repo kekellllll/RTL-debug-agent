@@ -1,0 +1,233 @@
+#!/usr/bin/perl
+#!/usr/local/bin/perl
+
+################################################################
+#              Copyright (C) 1998-present ECE Dept.            #
+#                  Carnegie Mellon University                  #
+################################################################
+
+use strict;
+
+my $program = $0;
+$program =~ s/.*\///;
+
+use Getopt::Long;
+
+sub usage {
+  warn " $program: @_ \n" if @_;
+  print " Usage: $program <netlist-file> <line1> [<line2>...<lineN>] [OPTIONS]\n\n";
+  print "  <netlist-file> \tFile containing the netlist description\n";
+  print "  <line1> [...]  \tList of lines whose logic cones are sought\n\n";
+  print " OPTIONS:\n";
+  print "   --output <FILE>\tStore the results in <file> (default: stdout)\n";
+  print "   --help\t\tPrint this online help and quit\n\n";
+  print " This script can be used to obtain the logic back cone for a signal\n";
+  print " line in a netlist described in ISCAS89 format.\n";
+  die "\n";
+}
+
+# Defaults
+my $output = "";
+my $help = 0;
+
+GetOptions(
+	   "output=s"   => \$output,
+	   "help"       => \$help,
+	  ) || die " $program: Try -h or --help option for more information\n";
+
+if ($help) {
+  usage;
+}
+
+if (@ARGV < 2) {
+  print " $program: The netlist file and the signal lines are required\n";
+  die " $program: Try -h or --help option for more information\n";
+}
+
+my $netlist_file = shift(@ARGV);
+
+my @signal_lines = @ARGV;
+
+my %netlist = ();
+my %stems = ();
+my @pis = ();
+my @pos = ();
+my %gate_type_array = ();
+my %values = ();
+
+setup_arrays();
+
+# Read the netlist
+read_iscas89_file($netlist_file);
+
+my $file_handle;
+
+# The output file
+if ($output) {
+  open(OUTFILE, "> $output") or die " $program: Could not open $output for writing\n";
+  $file_handle = \*OUTFILE;
+}
+else {
+  $file_handle = \*STDOUT;
+}
+
+my %touched = ();
+while (@signal_lines) {
+  my @gates = ();
+
+  my $signal_line = shift(@signal_lines);
+
+  @gates = backward_cone($signal_line);
+  print_cone($file_handle, $signal_line, \@gates);
+
+  %touched = ();
+}
+
+if ($output) {
+  close(OUTPUT);
+}
+
+##
+# Sub-routines
+##
+
+# Subroutine to read the ISCAS89 netlist format and store the contents in
+# the netlist hash array
+sub read_iscas89_file {
+  # Get the benchmark name
+  my $iscas_file = shift;
+
+  # Open the input file
+  open(BENCHFILE, $iscas_file) or die " $program: Error, could not read the circuit netlist file\n";
+
+  my $gate_count = 0;
+
+  while (<BENCHFILE>) {
+    # Get information from the input for PI formation
+    if ($_ =~ /input\((.*)\).*/i) {
+      my $primary_input = $1;
+
+      push (@pis, $primary_input);
+
+      # Update type of signal line
+      $netlist{$primary_input}{type} = $gate_type_array{"PI"};
+    }
+
+    # Get information from the output for PO stems
+    if ($_ =~ /output\((.*)\).*/i) {
+      # Yes it has been found
+      my $primary_output = $1;
+
+      push (@pos, $primary_output);
+
+      # Update the PO status of signal line
+      $netlist{$primary_output}{PO} = 1;
+    }
+
+    # Get information from the gates
+    if ($_ =~ /\s*(.*)\s*=\s*(\w+)\s*\((.*)\).*/) {
+      my $gate_output = $1;
+      my $gate_type = $2;
+      my $gate_inputs = $3;
+
+      $gate_output =~ s/\s+//g;
+
+      $gate_count++;
+      # Get the signal lines from the inputs
+      # Replace all spaces with no spaces
+      $gate_inputs =~ s/\s+//g;
+
+      # Substitute all "," with " "
+      $gate_inputs =~ s/,/ /g;
+
+      my @inputs = split(/\s+/, $gate_inputs);
+      my $num_inputs = @inputs;
+
+      # Push the gate type into the netlist hash array
+      # This is the first element of the array for each gate_output
+      my $type = $gate_type_array{$gate_type};
+      $netlist{$gate_output}{type} = $type;
+
+      foreach my $input (@inputs) {
+	# Add $input to the fan-ins of $gate_output
+	# print "Pushing $input into the FAN IN of $gate_output \n";
+	push @{ $netlist{$gate_output}{fanin} }, $input;
+
+	# Add $input to the fan-out of $gate_output
+	# print "Pushing $gate_out into the FAN OUT of $input \n";
+	push @{ $netlist{$input}{fanout} }, $gate_output;
+
+	# Find out if the input has branches and add it to stems array
+	if (@{$netlist{$input}{fanout}} > 1) {
+	  # Has branches, so check if it has already been added
+	  if ($stems{$input} != 1) {
+	    $stems{$input} = 1;
+	  }
+	}
+      }
+    }
+  }
+
+  # print "Read $gate_count gates from $benchmark\n";
+  close(BENCHFILE);
+}
+
+# Subroutine to form the gate type hash array
+sub setup_arrays {
+  my @gates = ("NOT", "AND", "OR", "NAND", "NOR", "XOR", "XNOR", "DFF", "BUFF", "PI", "PO");
+
+  my $index = -1;
+
+  %gate_type_array = map {$_ => ++$index, lc($_) => $index, $index => $_} @gates;
+
+  $values{"ZERO"} = 0;
+  $values{"ONE"} = 1;
+}
+
+# Get the backward cone
+sub backward_cone {
+  # Get the sub-routine parameters
+  my $cone_line = shift;
+
+  my @queue = ();
+  my @gates = ();
+
+  push (@queue, $cone_line);
+
+  while (@queue) {
+    my $line = shift (@queue);
+
+    if (!(defined $touched{$line})) {
+      $touched{$line} = 1;
+
+      push (@gates, $line);
+
+      # Add its fanins (if any) into the queue
+      if (exists $netlist{$line}{fanin}) {
+	my @fanins = @{ $netlist{$line}{fanin} };
+
+	while (@fanins) {
+	  my $fanin = shift(@fanins);
+
+	  push(@queue, $fanin);
+	}
+      }
+    }
+  }
+
+  return (@gates);
+}
+
+# Print the backward cone
+sub print_cone {
+  my $FH = shift;
+  my $line = shift;
+  my @cone = @{@_[0]};
+
+  printf $FH " Cone for %s: ", $line;
+  while (@cone) {
+    my $a_line = shift(@cone);
+    print $FH "$a_line ";
+  }
+  print $FH "\n";
+}

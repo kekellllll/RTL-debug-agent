@@ -1,0 +1,5 @@
+*.resp
+*.fclass
+*.tgen
+*.fsim
+*.tests
