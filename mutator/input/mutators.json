@@ -1,0 +1,70 @@
+[
+  {
+    "name": "reset_polarity_flip",
+    "content": "If the design has asynchronous or synchronous reset, invert its polarity once (e.g., if(rst)->if(!rst)) and make any minimal changes needed so the code still compiles."
+  },
+  {
+    "name": "off_by_one_counter",
+    "content": "If there is a counter or loop, modify exactly one terminal comparison or increment/decrement by ±1 to create an off-by-one bug."
+  },
+  {
+    "name": "condition_negation",
+    "content": "Choose exactly one conditional expression and widen, narrow, or negate it (e.g., <-><=, ==->!=) while keeping the code valid."
+  },
+  {
+    "name": "blocking_nonblocking_swap_seq",
+    "content": "Inside a clocked always block only, replace exactly one non-blocking assignment with blocking or vice versa. Do not touch combinational blocks."
+  },
+  {
+    "name": "width_mismatch",
+    "content": "Change exactly one signal, vector width, or slice so that an assignment truncates or zero-extends (e.g., assign y = x[8:1];) while remaining syntactically valid."
+  },
+  {
+    "name": "logic_error",
+    "content": "Modify exactly one logical operator (&&, ||, !) or control condition to an incorrect form that changes behavior but still compiles."
+  },
+  {
+    "name": "assignment_style",
+    "content": "In a combinational always block, change exactly one assignment style from blocking to non-blocking or vice versa, keeping the code valid."
+  },
+  {
+    "name": "initialization_fault",
+    "content": "Change exactly one reset or initial value to an incorrect one (e.g., 1'b0->1'b1 or 8'd0->8'd4) while maintaining syntax correctness."
+  },
+  {
+    "name": "data_handling",
+    "content": "Alter exactly one data-handling operation such as signedness, concatenation, or cast (e.g., remove $signed, modify a literal base, or flip endian bits) while keeping code valid."
+  },
+  {
+    "name": "state_machine",
+    "content": "In a finite-state machine, modify exactly one state transition, next-state assignment, or encoding constant to an incorrect value while keeping the case structure syntactically correct."
+  },
+  {
+    "name": "comparison_operator",
+    "content": "Replace exactly one comparison operator (==, !=, <, <=, >, >=) with a similar but incorrect one at a single site."
+  },
+  {
+    "name": "bitwise_operator",
+    "content": "Change exactly one bitwise or shift operator (&, |, ^, ~, <<, >>) to a different operator at one location, preserving valid widths."
+  },
+  {
+    "name": "condition_priority",
+    "content": "In a nested if/else or case statement, reorder or alter one condition to change which branch executes first while keeping syntax correct."
+  },
+  {
+    "name": "signal_declaration",
+    "content": "Modify exactly one signal declaration or port property (e.g., width, direction, or type wire/reg/logic) so that semantics change but the design still compiles."
+  },
+  {
+    "name": "arithmetic_operator",
+    "content": "Replace exactly one arithmetic operator (+, -, *, /, %) with another valid operator, or adjust one operand constant (e.g., +1→+2), ensuring no divide-by-zero."
+  },
+  {
+    "name": "value_literal",
+    "content": "Change exactly one numeric constant or parameter value (e.g., 6'h04->6'h05) that affects behavior, keeping widths compatible."
+  },
+  {
+    "name": "other_minor",
+    "content": "Introduce a small but compiling perturbation not covered above, such as removing a redundant signal, reordering statements, or adding an inert delay that still changes functional behavior."
+  }
+]

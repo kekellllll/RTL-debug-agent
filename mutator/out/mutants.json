@@ -1,0 +1,35 @@
+{
+  "0": {
+    "verilog": "module calculator(\n    input logic [31:0] a,\n    input logic [31:0] b,\n    input logic reset_n,\n    output logic [31:0] add,\n    output logic [31:0] sub,\n    output logic [31:0] mul,\n    output logic [31:0] div\n);\n\n    always @(a, b, reset_n) begin\n        if(!reset_n) begin\n            add <= 0;\n            sub <= 0;\n            mul <= 0;\n            div <= 0;\n        end else begin\n            add <= a + b;\n            sub <= a - b;\n            mul <= a * b;\n            if(b != 1) begin\n                div <= a / b;\n            end else begin\n                div <= 0;\n            end\n        end\n    end\n\nendmodule"
+  },
+  "1": {
+    "verilog": "module calculator(\n    input logic [31:0] a,\n    input logic [31:0] b,\n    input logic reset_n,\n    output logic [31:0] add,\n    output logic [31:0] sub,\n    output logic [31:0] mul,\n    output logic [31:0] div\n);\n\n    always @(a, b, reset_n) begin\n        if(!reset_n) begin\n            add <= 0;\n            sub <= 0;\n            mul <= 0;\n            div <= 0;\n        end else begin\n            add <= a + b;\n            sub <= a - b;\n            mul <= a * b;\n            if(b == 0) begin\n                div <= 0;\n            end else begin\n                div <= a / b;\n            end\n        end\n    end\n\nendmodule"
+  },
+  "2": {
+    "verilog": "module calculator(\n    input logic [31:0] a,\n    input logic [31:0] b,\n    input logic reset_n,\n    output logic [31:0] add,\n    output logic [31:0] sub,\n    output logic [31:0] mul,\n    output logic [31:0] div\n);\n\n    always @(a, b, reset_n) begin\n        if(!reset_n) begin\n            add <= 0;\n            sub <= 0;\n            mul <= 0;\n            div <= 0;\n        end else begin\n            add <= a + b;\n            sub <= a - b;\n            mul <= a * b;\n            if(b == 0) begin\n                div <= a / b;\n            end else begin\n                div <= 0;\n            end\n        end\n    end\n\nendmodule"
+  },
+  "3": {
+    "verilog": "module clock_gating_cell (\n  input clk,\n  input enable,\n  output reg clk_out\n);\n\n  always @(posedge clk) begin\n    if (!enable)  // Mutation: negated the condition\n      clk_out <= clk;\n    else\n      clk_out <= 1'b0;\n  end\n\nendmodule"
+  },
+  "4": {
+    "verilog": "module clock_gating_cell (\n  input clk,\n  input enable,\n  output reg clk_out\n);\n\n  always @(posedge clk) begin\n    if (!enable)\n      clk_out <= clk;\n    else\n      clk_out <= 1'b0;\n  end\n\nendmodule"
+  },
+  "5": {
+    "verilog": "module clock_gating_cell (\n  input clk,\n  input enable,\n  output reg clk_out\n);\n\n  always @(posedge clk) begin\n    if (!enable) // Mutation: negated the condition\n      clk_out <= clk;\n    else\n      clk_out <= 1'b0;\n  end\n\nendmodule"
+  },
+  "6": {
+    "verilog": "module Comparator (\n  input [n-1:0] a,\n  input [n-1:0] b,\n  output gt,\n  output eq,\n  output lt\n);\n\nparameter n = 8; // bit width of input signals\n\nassign gt = (a > b) ? 1'b1 : 1'b0;\nassign eq = (a != b) ? 1'b1 : 1'b0; // Mutation: changed == to !=\nassign lt = (a < b) ? 1'b1 : 1'b0;\n\nendmodule"
+  },
+  "7": {
+    "verilog": "module Comparator (\n  input [n-1:0] a,\n  input [n-1:0] b,\n  output gt,\n  output eq,\n  output lt\n);\n\nparameter n = 8; // bit width of input signals\n\nassign gt = (a > b) ? 1'b1 : 1'b0;\nassign eq = (a == b) ? 1'b1 : 1'b0;\nassign lt = (a <= b) ? 1'b1 : 1'b0; // Mutation: changed < to <=\n\nendmodule"
+  },
+  "8": {
+    "verilog": "module Comparator (\n  input [n-1:0] a,\n  input [n-1:0] b,\n  output gt,\n  output eq,\n  output lt\n);\n\nparameter n = 8; // bit width of input signals\n\nassign gt = (a >= b) ? 1'b1 : 1'b0;\nassign eq = (a == b) ? 1'b1 : 1'b0;\nassign lt = (a < b) ? 1'b1 : 1'b0;\n\nendmodule"
+  },
+  "9": {
+    "verilog": "module parity_based_mux_demux (\n  input wire clk,\n  input wire reset,\n  input wire [15:0] in,\n  output wire [7:0] out_hi,\n  output wire [7:0] out_lo,\n  output wire [1023:0] out_demux\n);\n\n  // Parity checking module\n  wire parity = ^in;\n\n  // Demultiplexer\n  wire [7:0] demux_out [0:255];\n  wire [3:0] demux_sel = in[3:0];\n  assign out_lo = demux_out[0];\n  assign out_hi = demux_out[255];\n  demux_4_256 demux_inst (\n    .data(in),\n    .sel(demux_sel),\n    .out(demux_out)\n  );\n\n  // Multiplexer\n  wire [7:0] mux_out;\n  wire [3:0] mux_sel = in[15:12];\n  assign out_demux = 256'b0;\n  mux_2_4 mux_inst (\n    .data({8'b0, in[15:8]}),\n    .sel(parity),\n    .out(mux_out)\n  );\n  assign out_hi = parity ? mux_out : out_lo; // Mutation applied here\n  assign out_lo = parity ? out_lo : mux_out;\n\nendmodule\n\n// 4-to-256 demultiplexer\nmodule demux_4_256 (\n  input wire [15:0] data,\n  input wire [3:0] sel,\n  output wire [7:0] out [0:255]\n);\n  genvar i;\n  generate\n    for (i = 0; i < 256; i = i + 1) begin : demux_loop\n      assign out[i] = data[i*16 +: 8];\n    end\n  endgenerate\nendmodule\n\n// 2-to-4 multiplexer\nmodule mux_2_4 (\n  input wire [7:0] data,\n  input wire sel,\n  output wire [7:0] out\n);\n  assign out = sel ? data[3:0] : data[7:4];\nendmodule"
+  },
+  "10": {
+    "verilog": "module parity_based_mux_demux (\n  input wire clk,\n  input wire reset,\n  input wire [15:0] in,\n  output wire [7:0] out_hi,\n  output wire [7:0] out_lo,\n  output wire [1023:0] out_demux\n);\n\n  // Parity checking module\n  wire parity = ^in;\n\n  // Demultiplexer\n  wire [7:0] demux_out [0:255];\n  wire [3:0] demux_sel = in[3:0];\n  assign out_lo = demux_out[0];\n  assign out_hi = demux_out[255];\n  demux_4_256 demux_inst (\n    .data(in),\n    .sel(demux_sel),\n    .out(demux_out)\n  );\n\n  // Multiplexer\n  wire [7:0] mux_out;\n  wire [3:0] mux_sel = in[15:12];\n  assign out_demux = 256'b0;\n  mux_2_4 mux_inst (\n    .data({8'b0, in[15:8]}),\n    .sel(parity),\n    .out(mux_out)\n  );\n  assign out_hi = parity ? mux_out : out_lo; // Mutation applied here\n  assign out_lo = parity ? out_lo : mux_out;\n\nendmodule\n\n// 4-to-256 demultiplexer\nmodule demux_4_256 (\n  input wire [15:0] data,\n  input wire [3:0] sel,\n  output wire [7:0] out [0:255]\n);\n  genvar i;\n  generate\n    for (i = 0; i < 256; i = i + 1) begin : demux_loop\n      assign out[i] = data[i*16 +: 8];\n    end\n  endgenerate\nendmodule\n\n// 2-to-4 multiplexer\nmodule mux_2_4 (\n  input wire [7:0] data,\n  input wire sel,\n  output wire [7:0] out\n);\n  assign out = sel ? data[3:0] : data[7:4];\nendmodule"
+  }
+}

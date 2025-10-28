@@ -2,4 +2,4 @@
 *.fclass
 *.tgen
 *.fsim
-*.tests
+*.testsmutator/input/rtl.json
