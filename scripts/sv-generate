@@ -116,7 +116,8 @@ models_to_repeat_system_to_human_messages = [
 
 available_tasks = [
   "code-complete-iccad2023",
-  "spec-to-rtl"
+  "spec-to-rtl",
+  "rtl-debug"
 ]
 
 #-------------------------------------------------------------------------
@@ -150,6 +151,13 @@ You only complete chats with syntax correct Verilog code. End the Verilog module
 prompts['spec-to-rtl'] = {
   'system_msg' : """
 You are a Verilog RTL designer that only writes code using correct Verilog syntax.
+""",
+  'prompt_prefix' : ""
+}
+
+prompts['rtl-debug'] = {
+  'system_msg' : """
+You are an expert Verilog debugger. Your task is to identify bugs in the given Verilog code and provide a corrected version using proper Verilog syntax.
 """,
   'prompt_prefix' : ""
 }
@@ -327,6 +335,18 @@ def main():
     # TODO: Old prompt style, resolve
     # if opts.examples:
     #   full_prompt += "\n### Solution \n"
+    full_prompt += "\nAnswer:\n"
+  
+  elif task == "rtl-debug":
+    full_prompt += "\nQuestion:\n"
+    full_prompt += prompt.strip() + "\n"
+
+    if opts.rules:
+      full_prompt += prompt_rules_suffix
+
+    if not opts.explain:
+      full_prompt = full_prompt.rstrip() + "\n" + prompt_no_explain_suffix
+
     full_prompt += "\nAnswer:\n"
 
   # Print system message and prompt
@@ -636,6 +656,99 @@ def main():
         
       comment_delim = "//"
       print( comment_delim + " VERILOG-EVAL: response did not use <CODE></CODE> correctly", file=file )
+
+  elif task == "rtl-debug":
+    # rtl-debug uses the same extraction logic as spec-to-rtl
+    # First pass to find backticks and if module exists
+    backticks_count  = 0
+    endmodule_before_startmodule = False
+    module_already_exists = False
+    for line in iter(resp.content.splitlines()):
+      if line.startswith("```"):
+        backticks_count += 1
+      elif line.startswith("endmodule"):
+        if not module_already_exists:
+          endmodule_before_startmodule = True
+      elif line.startswith("module TopModule"):
+        module_already_exists = True
+
+    if endmodule_before_startmodule:
+      module_already_exists = False
+
+    # Scan response for code using [BEGIN][DONE]
+    found_code_lines = []
+    found_code_start = False
+    found_code_end   = False
+
+    for line in iter(resp.content.splitlines()):
+
+      if not found_code_start:
+        if line.strip() == "[BEGIN]":
+          found_code_start = True
+        elif line.lstrip().startswith("[BEGIN]"):
+          found_code_lines.append( line.lstrip().replace("[BEGIN]","") )
+          found_code_start = True
+
+      elif found_code_start and not found_code_end:
+        if line.strip() == "[DONE]":
+          found_code_end = True
+        elif line.rstrip().endswith("[DONE]"):
+          found_code_lines.append( line.rstrip().replace("[DONE]","") )
+          found_code_end = True
+        else:
+          found_code_lines.append( line )
+
+
+    if found_code_start and found_code_end:
+      for line in found_code_lines:
+        print( line, file=file )
+
+    # If did not find code by looking for [BEGIN][DONE], then scan response
+    # for code using backticks
+
+    if not found_code_start and not found_code_end:
+      # fallback to backtick extraction
+
+      # Second pass print out as appropriate
+      found_first_backticks  = False
+      found_second_backticks = False
+      found_module           = False
+      found_endmodule        = False
+
+      for line in iter(resp.content.splitlines()):
+        echo_line = True
+
+        if line.strip().startswith("module TopModule"):
+          found_module = True
+
+        if backticks_count >= 2:
+          if (not found_first_backticks) or found_second_backticks:
+            echo_line = False
+        else:
+          if found_endmodule:
+            echo_line = False
+          if module_already_exists and not found_module:
+            echo_line = False
+
+        if line.startswith("```"):
+          if not found_first_backticks:
+            found_first_backticks = True
+          else:
+            found_second_backticks = True
+          echo_line = False
+        elif line.strip().startswith("endmodule"):
+          found_endmodule = True
+
+        if echo_line:
+          if model == "manual-rtl-coder":
+            if line.strip().startswith("endmodule"):
+              line = line.rsplit('endmodule', 1)[0] + "\n" + "endmodule"
+          print( line, file=file )
+        
+      print( "", file=file )
+        
+      comment_delim = "//"
+      print( comment_delim + " VERILOG-EVAL: response did not use [BEGIN][DONE] correctly", file=file )
 
 
   print( "", file=file )
