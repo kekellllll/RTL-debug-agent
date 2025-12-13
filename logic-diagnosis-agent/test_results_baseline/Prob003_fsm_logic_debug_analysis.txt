@@ -1,0 +1,185 @@
+```systemverilog
+`timescale 1ns/1ps
+`default_nettype none
+
+// Corrected FSM: detects two consecutive '1's on input `in`.
+// Output `out` is asserted when the FSM is in state S2.
+module TopModule (
+    input        clk,
+    input        reset,
+    input        in,
+    output logic out
+);
+
+    // State encoding
+    typedef enum logic [1:0] {
+        S0 = 2'b00,  // No prior '1' seen (or last input was 0)
+        S1 = 2'b01,  // One '1' seen in previous cycle
+        S2 = 2'b10   // Two consecutive '1's detected
+    } state_t;
+
+    state_t state, next_state;
+
+    // State register with synchronous reset
+    always @(posedge clk) begin
+        if (reset)
+            state <= S0;
+        else
+            state <= next_state;
+    end
+
+    // Next-state logic
+    always @(*) begin
+        // Default assignment to avoid inferred latches
+        next_state = state;
+        case (state)
+            S0: begin
+                // If we see a '1', move to S1 (one '1' seen)
+                // If we see a '0', stay in S0
+                if (in)
+                    next_state = S1;
+                else
+                    next_state = S0;
+            end
+
+            S1: begin
+                // If we see another '1', move to S2 (two consecutive '1's)
+                // If we see a '0', go back to S0
+                if (in)
+                    next_state = S2;
+                else
+                    next_state = S0;
+            end
+
+            S2: begin
+                // We have detected "11" and are in S2.
+                // For a *non-overlapping* detector, any new input restarts:
+                //  - If next input is '1', treat it as first '1' of a new sequence -> S1
+                //  - If next input is '0', no '1' pending -> S0
+                if (in)
+                    next_state = S1;
+                else
+                    next_state = S0;
+            end
+
+            default: begin
+                next_state = S0;
+            end
+        endcase
+    end
+
+    // Output logic: assert when in S2
+    always @(*) begin
+        out = (state == S2);
+    end
+
+endmodule
+```
+
+---
+
+### 1. Functionality and expected behavior
+
+This module is a finite state machine (FSM) that:
+
+- Samples input `in` on each rising edge of `clk`.
+- Detects the pattern of **two consecutive '1's** on `in`.
+- Asserts `out` when the FSM is in state `S2`, which corresponds to having just seen the sequence `"11"`.
+
+Intended state meanings:
+
+- `S0`: No pending '1' (either we have seen '0' or just reset).
+- `S1`: Exactly one '1' has been seen in the previous cycle (`in` was 1 last cycle, but we haven't yet seen the second '1').
+- `S2`: Two consecutive '1's have been seen (pattern `"11"` detected). `out` is high in this state.
+
+The corrected implementation above behaves as a **non-overlapping** "11" detector:
+- Input: `0 1 1 1 0`
+- States: `S0 S0 S1 S2 S1 S0`
+- Output: `0 0 0 1 0 0`
+
+If overlapping behavior were desired (e.g., detect "111" as two overlapping "11"s), the S2 transition on `in==1` would go to `S2` or `S1` depending on spec; here we choose a clean restart pattern (S2→S1 on `in==1`).
+
+---
+
+### 2. Bugs in the original code
+
+Original next-state logic:
+
+```systemverilog
+always @(*) begin
+    case (state)
+        S0: next_state = in ? S1 : S0;
+        S1: next_state = in ? S2 : S0;
+        S2: next_state = in ? S2 : S0;
+    endcase
+end
+```
+
+Issues:
+
+1. **Missing default / full coverage in case statement**
+   - There is no `default` branch and no initialization of `next_state` before the `case`.
+   - If `state` ever takes an X or invalid value (e.g., from reset glitches or simulation initialization), `next_state` may remain unassigned in that branch, potentially inferring a latch or propagating Xs in simulation.
+
+2. **Behavior in S2 does not match a clean "two consecutive 1s" detector**
+   - In `S2`, the original code uses:
+     ```systemverilog
+     S2: next_state = in ? S2 : S0;
+     ```
+   - This means:
+     - If `in` stays 1, the FSM stays in S2 indefinitely.
+     - That effectively treats any run of 1s of length ≥2 as staying in the "detected" state forever, which is often not what is intended for a simple "two consecutive 1s" detector that should move on after detection.
+   - The problem statement says: "The FSM should detect a sequence of two consecutive '1's on the input and assert the output when in state S2."
+     - After detection, you typically want to re-evaluate new inputs for new sequences, not remain stuck in S2 as long as `in` is 1.
+     - A more natural behavior is: from S2, if `in` is 1, treat that as the first '1' of a new potential sequence (go to S1); if `in` is 0, go to S0.
+
+3. **No explicit handling of illegal states**
+   - If `state` somehow becomes `2'b11` (not one of S0, S1, S2), the `case` has no branch for it, and `next_state` is left unassigned in that situation.
+
+---
+
+### 3. Cause of the bugs
+
+- **Missing default / initialization**:
+  - In synthesizable FSMs, every path through the combinational next-state logic must assign `next_state`. Without a default assignment or a `default` case, some tools may infer latches or propagate Xs.
+  - While the enumerated states cover 3 of the 4 possible 2-bit values, the unused encoding (`2'b11`) is not handled. In simulation, if `state` is X or 2'b11, `next_state` is not driven.
+
+- **Incorrect S2 transition behavior**:
+  - The original S2 transition `S2: next_state = in ? S2 : S0;` effectively says:
+    - Once you have detected "11", as long as `in` remains 1, you stay in S2.
+  - For a simple "two consecutive 1s" detector, you usually want:
+    - S0: no '1' pending
+    - S1: one '1' pending
+    - S2: just detected "11"
+    - After S2, you should restart the detection logic:
+      - If the next input is 1, that is the first '1' of a new potential "11" → S1.
+      - If the next input is 0, no pending '1' → S0.
+  - The original behavior can be considered a design bug relative to the typical and clearer interpretation of the requirement.
+
+---
+
+### 4. Summary of fixes
+
+1. **Add default assignment and default case for safety**:
+   - Initialize `next_state = state;` at the top of the combinational block.
+   - Add a `default` branch in the `case` to force recovery to S0 if an illegal state occurs.
+
+2. **Correct S2 transitions**:
+   - Change S2 behavior from:
+     ```systemverilog
+     S2: next_state = in ? S2 : S0;
+     ```
+   - To:
+     ```systemverilog
+     S2: begin
+         if (in)
+             next_state = S1; // treat as first '1' of a new sequence
+         else
+             next_state = S0;
+     end
+     ```
+
+3. **Keep output logic as-is**:
+   - `out = (state == S2);` is correct for asserting output when in S2.
+
+The final code at the top incorporates all these corrections and adheres to the Icarus Verilog / SystemVerilog constraints you specified.

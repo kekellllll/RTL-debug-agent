@@ -1,0 +1,247 @@
+Below is a detailed analysis followed by a fully corrected implementation that complies with all the given constraints (Icarus Verilog, SystemVerilog style, no declarations in always blocks, etc.).
+
+---
+
+## 1. Functionality and Expected Behavior
+
+The `TopModule` is a simple floating-point unit (FPU) wrapper around two submodules:
+
+- `fp_adder`    → computes `sum = a + b` (IEEE-754 single precision)
+- `fp_multiplier` → computes `product = a * b`
+
+The top-level FPU must:
+
+- Use `sum` when `sel == 1'b0` (FP_ADD).
+- Use `product` when `sel == 1'b1` (FP_MULTIPLY).
+
+Additionally, it must correctly handle IEEE-754 special cases:
+
+1. **NaN (Not a Number)**  
+   - Detected when exponent is all ones and mantissa is non-zero:  
+     `exp == 8'hFF && mantissa != 0`  
+     i.e., `a[30:23] == 8'hFF && a[22:0] != 23'b0` (and similarly for `b`).
+   - If either input is NaN, output should be a NaN representation (here, `32'hFFFFFFFF` is used as a generic NaN code).
+
+2. **Infinity**  
+   - +Inf: `32'h7F800000`  
+   - -Inf: `32'hFF800000`
+   - For addition:
+     - `+Inf + -Inf` or `-Inf + +Inf` → NaN (`32'hFFFFFFFF`).
+     - Otherwise, if one operand is Inf and the other is finite, result is that Inf.
+   - For multiplication:
+     - The code does not explicitly handle `0 * Inf` or `Inf * 0` as NaN; it relies on the multiplier or the testbench’s expectations. The problem statement only explicitly requires:
+       - For multiplication with zero, output should be zero (32'd0).
+
+3. **Zero**  
+   - Zero when exponent is 0 and mantissa is 0: `exp == 8'b0 && mantissa == 23'b0`.
+   - For addition:
+     - If one operand is exactly zero, output should be the other operand.
+   - For multiplication:
+     - If either operand is zero, output should be zero (`32'd0`).
+
+The general priority of special-case handling is:
+
+1. NaN detection (highest priority).
+2. Inf + -Inf special case for addition.
+3. Propagate Inf if one operand is Inf.
+4. Zero handling for add/mul.
+5. Otherwise, use `sum` or `product` based on `sel`.
+
+---
+
+## 2. Identified Bugs
+
+The original code already annotates three bugs in comments; we confirm and clarify them:
+
+### Bug 1: Incorrect NaN Detection
+
+Original code:
+
+```systemverilog
+if ((a[30:23] == 8'hFF && a[21:0] != 22'b0) || (b[30:23] == 8'hFF && b[21:0] != 22'b0)) begin
+    y = 32'hFFFFFFFF;
+end 
+```
+
+- **Issue**: It checks `a[21:0]` and `b[21:0]` instead of the full mantissa `a[22:0]` and `b[22:0]`.
+- **Effect**: If the MSB of the mantissa (bit 22) is the only non-zero bit, the code fails to detect NaN.
+
+### Bug 2: Multiplication by Zero Returns Wrong Value
+
+Code in zero-handling block:
+
+```systemverilog
+else if (a[30:23] == 8'b0 || b[30:23] == 8'b0) begin
+    // one of the numbers is zero
+    if (sel == 1'b0) begin
+        ...
+    end else if (sel == 1'b1) begin
+        // BUG 2: Multiplication by zero should return zero, but returns wrong value
+        // Bug: returns sum instead of 0
+        y = sum; // BUG: should be 32'd0 for multiplication by zero
+    end
+end
+```
+
+- **Issue**: For multiplication (`sel == 1`), when one operand has exponent 0 (potentially zero), it assigns `y = sum` instead of zero.
+- **Effect**: `a * b` where one operand is zero should yield zero, but the module outputs the adder result.
+
+Note: The code’s zero detection is slightly broader (`a[30:23] == 0` or `b[30:23] == 0`) but then checks mantissa to distinguish exact zero in the addition case. For multiplication, the problem statement is clear: “For multiplication with zero, output should be zero (32'd0).” We will implement that explicitly.
+
+### Bug 3: Reversed Selection Logic for sum/product
+
+In the main `case (sel)`:
+
+```systemverilog
+case (sel)
+    1'b0: begin
+        // BUG 3: Selection logic is reversed - when sel=0 (FP_ADD), it uses product instead of sum
+        // Implement floating-point addition
+        y = product; // BUG: should be sum
+    end
+    1'b1: begin
+        // Implement floating-point multiplication
+        y = sum; // BUG: should be product
+    end
+    default: begin
+        y = 32'hFFFFFFFF;
+    end
+endcase
+```
+
+- **Issue**: When `sel == 0` (add), it outputs `product`; when `sel == 1` (multiply), it outputs `sum`.
+- **Effect**: The FPU performs the opposite operation of what `sel` indicates.
+
+---
+
+## 3. Causes of the Bugs
+
+1. **NaN Detection Bug**:  
+   Likely a simple off-by-one error in bit indexing. IEEE-754 single-precision mantissa is 23 bits `[22:0]`. Using `[21:0]` omits the most significant mantissa bit, causing some NaNs to be misclassified as infinities.
+
+2. **Multiplication-by-Zero Bug**:  
+   The zero-handling logic was written primarily for addition and then partially reused for multiplication without adjusting the behavior. For multiplication, any zero operand should force the result to zero, but the code incorrectly reuses `sum`.
+
+3. **Selection Logic Bug**:  
+   A straightforward wiring mistake: the comments and intended behavior say “sel=0 → addition, sel=1 → multiplication,” but the assignments are swapped.
+
+---
+
+## 4. Complete Fixed Code
+
+Key fixes:
+
+- Correct NaN detection to use `a[22:0]` and `b[22:0]`.
+- For multiplication with zero, explicitly drive `y = 32'd0`.
+- Correct the `case (sel)` to use `sum` for addition and `product` for multiplication.
+- Preserve all port widths and SystemVerilog style.
+- No variable declarations inside `always` blocks.
+- Add mandatory header directives.
+
+```systemverilog
+`timescale 1ns/1ps
+`default_nettype none
+
+module TopModule (
+    input  logic [31:0] a,
+    input  logic [31:0] b,
+    input  logic        sel,
+    output logic [31:0] y
+);
+
+    // Results from submodules
+    logic [31:0] sum;
+    logic [31:0] product;
+
+    // External modules are provided by the testbench
+    fp_adder adder (
+        .a   (a),
+        .b   (b),
+        .sum (sum)
+    );
+
+    fp_multiplier multiplier (
+        .a       (a),
+        .b       (b),
+        .product (product)
+    );
+
+    always @(*) begin
+        // Default
+        y = 32'd0;
+
+        // 1) NaN detection: exponent == 0xFF and mantissa != 0 (all 23 bits)
+        if ( (a[30:23] == 8'hFF && a[22:0] != 23'b0) ||
+             (b[30:23] == 8'hFF && b[22:0] != 23'b0) ) begin
+            // Output a NaN pattern
+            y = 32'hFFFFFFFF;
+        end
+        // 2) Infinity + (-Infinity) or (-Infinity) + Infinity => NaN (only for addition)
+        else if (sel == 1'b0 &&
+                 (a == 32'h7F800000 || a == 32'hFF800000) &&
+                 (b == 32'h7F800000 || b == 32'hFF800000) &&
+                 (a[31] != b[31])) begin
+            y = 32'hFFFFFFFF;
+        end
+        // 3) If one operand is infinity, propagate it (higher priority than zero)
+        else if (a == 32'h7F800000 || a == 32'hFF800000) begin
+            y = a;
+        end
+        else if (b == 32'h7F800000 || b == 32'hFF800000) begin
+            y = b;
+        end
+        // 4) Zero handling
+        else if (a[30:23] == 8'b0 || b[30:23] == 8'b0) begin
+            // At least one operand has exponent 0 (could be zero or subnormal)
+            if (sel == 1'b0) begin
+                // Addition
+                // If a is exactly zero, return b
+                if (a[30:23] == 8'b0 && a[22:0] == 23'b0) begin
+                    y = b;
+                end
+                // If b is exactly zero, return a
+                else if (b[30:23] == 8'b0 && b[22:0] == 23'b0) begin
+                    y = a;
+                end
+                // If both are subnormal or other corner cases, fall back to adder result
+                else begin
+                    y = sum;
+                end
+            end
+            else begin
+                // Multiplication: if either operand is zero (or exponent==0 case),
+                // the required behavior is to output zero.
+                y = 32'd0;
+            end
+        end
+        // 5) Normal operation: select between sum and product
+        else begin
+            case (sel)
+                1'b0: begin
+                    // Floating-point addition
+                    y = sum;
+                end
+                1'b1: begin
+                    // Floating-point multiplication
+                    y = product;
+                end
+                default: begin
+                    // Should not occur for 1-bit sel; use NaN pattern as safe default
+                    y = 32'hFFFFFFFF;
+                end
+            endcase
+        end
+    end
+
+endmodule : TopModule
+```
+
+### Summary of Fixes
+
+- **Bug 1**: NaN detection now uses `a[22:0]` and `b[22:0]` (full mantissa).
+- **Bug 2**: For multiplication with zero (in the exponent-0 branch and `sel == 1`), `y` is set to `32'd0`.
+- **Bug 3**: `case (sel)` now correctly maps:
+  - `sel == 0` → `y = sum`
+  - `sel == 1` → `y = product`
+
+This implementation should compile under Icarus Verilog with `-g2012` and behave as required by the problem statement.

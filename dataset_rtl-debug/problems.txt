@@ -1,4 +1,8 @@
 Prob001_mux_bitwidth_debug
 Prob002_counter_reset_debug
 Prob003_fsm_logic_debug
-
+Prob004_fpu_debug
+Prob005_softmax_core_debug
+Prob006_dla_debug
+Prob007_fp_to_fix_debug
+Prob008_multi_cycle_divider_debug

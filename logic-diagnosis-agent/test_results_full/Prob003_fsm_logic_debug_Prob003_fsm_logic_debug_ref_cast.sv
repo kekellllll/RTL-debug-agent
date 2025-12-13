@@ -24,11 +24,11 @@ module RefModule (
     end
 
     always @(*) begin
-        next_state = S0; // Default assignment to avoid latches
+                next_state = state_t'(S0); // Default assignment to avoid latches
         case (state)
-            S0: next_state = state_t'(in ? S1 : S0);
-            S1: next_state = state_t'(in ? S2 : S0);
-            S2: next_state = state_t'(in ? S2 : S0);
+            S0:         next_state = state_t'(state_t'(in ? S1 : S0));
+            S1:         next_state = state_t'(state_t'(in ? S2 : S0));
+            S2:         next_state = state_t'(state_t'(in ? S2 : S0));
         endcase
     end
 

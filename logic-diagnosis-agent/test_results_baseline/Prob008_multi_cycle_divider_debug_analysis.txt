@@ -1,0 +1,267 @@
+1. Functionality and expected behavior
+-------------------------------------
+
+This module is intended to implement an **iterative restoring divider**:
+
+- Inputs:
+  - `dividend` : 47-bit unsigned
+  - `divisor`  : 24-bit unsigned
+  - `start`    : pulse to begin a division
+- Outputs:
+  - `quotient` : 24-bit unsigned result of `dividend / divisor`
+  - `done`     : asserted when the result is ready
+
+Algorithm intent (from the code structure):
+
+- Use a **remainder/quotient shift** method:
+  - `curr_remainder` is 25 bits (1 extra bit for overflow during subtraction).
+  - `curr_quotient` is 24 bits.
+- At each **bit iteration**:
+  1. Shift `remainder` left by 1, bring in the next MSB of the quotient (or dividend bits).
+  2. Shift `quotient` left by 1.
+  3. Compare `remainder` with `divisor`.
+  4. If `remainder >= divisor`, subtract divisor and set the new quotient LSB to 1, else set it to 0.
+- To reduce cycles, it processes `BITS_PER_STAGE` bits per clock:
+  - `NUM_STAGES = ceil(24 / BITS_PER_STAGE)`.
+  - Each clock in `DIVIDE` state runs a small for-loop of `BITS_PER_STAGE` single-bit iterations.
+- After `NUM_STAGES` cycles, the 24-bit quotient should be valid and `done` should pulse.
+
+2. Bugs in the code
+-------------------
+
+### Bug 1: Illegal variable declaration inside always_ff
+
+Inside the `DIVIDE` state:
+
+```systemverilog
+for (int i = 0; i < BITS_PER_STAGE; i = i + 1) begin
+    ...
+end
+```
+
+- `int i` is declared **inside** the `always_ff` block.
+- Under Icarus Verilog (even with `-g2012`), **declaring variables inside always blocks is not supported** and will cause a syntax error.
+- This violates the explicit constraints you gave.
+
+**Effect:** Code does not compile.
+
+---
+
+### Bug 2: `done` is not cleared on state transitions out of DONE
+
+In the `DONE` state:
+
+```systemverilog
+DONE: begin
+    done <= 1'b1;
+    state <= IDLE;
+end
+```
+
+- `done` is asserted for one cycle, then the FSM goes to `IDLE`.
+- In `IDLE`, `done` is cleared only when `start` is not asserted:
+  ```systemverilog
+  IDLE: begin
+      done <= 1'b0;
+      bit_index <= '0;
+      if (start) begin
+          ...
+          state <= DIVIDE;
+      end
+  end
+  ```
+- This is actually acceptable for a one-cycle pulse, but there is a **subtle race**:
+  - If `start` is asserted in the same cycle that `DONE` is active, the next cycle will be `IDLE` with `start=1`.
+  - `done` is set to 0 in `IDLE` regardless, so there is no functional bug here.
+- So this is **not a functional bug**, just confirming behavior is as intended: `done` is a one-cycle pulse.
+
+Conclusion: no change required here.
+
+---
+
+### Bug 3: No protection against `divisor == 0`
+
+The code never checks for `divisor == 0`:
+
+```systemverilog
+if (working_remainder[24:0] >= divisor) begin
+    working_remainder[23:0] = working_remainder[23:0] - divisor;
+    working_quotient[0] = 1'b1;
+end
+```
+
+- If `divisor` is 0, the comparison `>= divisor` is always true, and the subtraction `- divisor` is a no-op.
+- The algorithm will then set quotient bits to 1 for every iteration, resulting in a quotient of all 1s and a meaningless remainder.
+- Division by zero is undefined; typical hardware either:
+  - returns 0,
+  - returns max value,
+  - or flags an error.
+- Since the problem statement does not specify behavior for `divisor == 0`, the testbench may or may not hit this case. I will add a simple, safe behavior: if `divisor == 0`, return quotient 0 and `done` immediately.
+
+---
+
+### Bug 4: Unused signals and minor style issues
+
+- `iter` is declared but commented-out logic uses it; currently it is unused. This is not a functional bug, just dead code.
+- `curr_dividend` is assigned in reset and IDLE but never used in DIVIDE. The actual algorithm uses `curr_remainder` and `curr_quotient` only. Again, not a functional bug, just unused.
+
+Given the problem statement, we can leave them or remove them; leaving them is harmless.
+
+3. Cause of the bugs
+--------------------
+
+- **Bug 1 (int i in always_ff)**: Mixing SystemVerilog-style for-loop variable declarations with a simulator (Icarus Verilog) that does not fully support variable declarations inside procedural blocks. This is a common portability issue.
+- **Bug 3 (no divisor==0 handling)**: Algorithm assumes a valid non-zero divisor. Without explicit checks, division-by-zero becomes an unintended corner case.
+
+4. Fixed implementation
+-----------------------
+
+Key fixes:
+
+- Move loop index `i` to module scope as an `int` and use it in the for-loop.
+- Add a simple `divisor == 0` handling path.
+- Keep all ports and widths exactly the same.
+- Keep SystemVerilog syntax but avoid variable declarations inside always blocks.
+
+```systemverilog
+`timescale 1ns/1ps
+`default_nettype none
+
+module TopModule #(
+    parameter BITS_PER_STAGE = 3
+)(
+    input  logic        clk,
+    input  logic        rst_b,
+    input  logic        start,
+    input  logic [46:0] dividend,
+    input  logic [23:0] divisor,
+    output logic [23:0] quotient,
+    output logic        done
+);
+
+    // FSM state encoding
+    typedef enum logic [1:0] {
+        IDLE   = 2'b00,
+        DIVIDE = 2'b01,
+        DONE   = 2'b10
+    } state_t;
+
+    state_t state;
+
+    // Number of multi-bit stages to process 24 quotient bits
+    localparam int NUM_STAGES = (24 + BITS_PER_STAGE - 1) / BITS_PER_STAGE;
+
+    // Stage index
+    logic [$clog2(NUM_STAGES)-1:0] bit_index;
+
+    // Working registers
+    logic [46:0] curr_dividend;   // kept for completeness, not used in algorithm
+    logic [23:0] curr_quotient;
+    logic [24:0] curr_remainder;
+
+    logic [23:0] working_quotient;
+    logic [24:0] working_remainder;
+
+    // Loop index must be declared at module level for Icarus Verilog
+    int i;
+
+    // Sequential logic
+    always_ff @(posedge clk or negedge rst_b) begin
+        if (!rst_b) begin
+            done           <= 1'b0;
+            bit_index      <= '0;
+            curr_dividend  <= '0;
+            curr_quotient  <= '0;
+            curr_remainder <= '0;
+            state          <= IDLE;
+        end else begin
+            case (state)
+                IDLE: begin
+                    done      <= 1'b0;
+                    bit_index <= '0;
+
+                    if (start) begin
+                        // Handle divisor == 0 as a special case:
+                        // here we choose quotient = 0, done immediately.
+                        if (divisor == 24'd0) begin
+                            curr_dividend  <= dividend;
+                            curr_quotient  <= 24'd0;
+                            curr_remainder <= 25'd0;
+                            state          <= DONE;
+                        end else begin
+                            // Initialize registers for division
+                            curr_dividend  <= dividend;
+                            // Take top 23 bits of dividend into remainder with 2 leading zeros
+                            curr_remainder <= {2'b0, dividend[46:24]};
+                            // Lower 24 bits of dividend become initial quotient shift register
+                            curr_quotient  <= dividend[23:0];
+                            state          <= DIVIDE;
+                        end
+                    end
+                end
+
+                DIVIDE: begin
+                    // Copy current working values
+                    working_remainder = curr_remainder;
+                    working_quotient  = curr_quotient;
+
+                    // Process BITS_PER_STAGE single-bit iterations
+                    // NOTE: i is declared at module level (Icarus-compatible)
+                    for (i = 0; i < BITS_PER_STAGE; i = i + 1) begin
+                        // Shift remainder left and bring in next MSB of quotient
+                        working_remainder = working_remainder << 1;
+                        working_remainder[0] = working_quotient[23];
+
+                        // Shift quotient left
+                        working_quotient = working_quotient << 1;
+
+                        // Restoring division step
+                        if (working_remainder[24:0] >= {1'b0, divisor}) begin
+                            // Subtract divisor from lower 24 bits of remainder
+                            working_remainder[23:0] =
+                                working_remainder[23:0] - divisor;
+                            // Set new quotient LSB
+                            working_quotient[0] = 1'b1;
+                        end else begin
+                            working_quotient[0] = 1'b0;
+                        end
+                    end
+
+                    // Update registers for next stage
+                    curr_remainder <= working_remainder;
+                    curr_quotient  <= working_quotient;
+
+                    // Check if all stages are done
+                    if (bit_index == NUM_STAGES - 1) begin
+                        state <= DONE;
+                    end else begin
+                        bit_index <= bit_index + 1;
+                    end
+                end
+
+                DONE: begin
+                    // One-cycle done pulse; result is in curr_quotient
+                    done  <= 1'b1;
+                    state <= IDLE;
+                end
+
+                default: begin
+                    // Safe default: go to IDLE
+                    state <= IDLE;
+                    done  <= 1'b0;
+                end
+            endcase
+        end
+    end
+
+    // Output assignment
+    assign quotient = curr_quotient;
+
+endmodule
+```
+
+Summary of fixes:
+
+- Moved `int i;` to module scope to satisfy Icarus Verilog restrictions.
+- Added explicit `divisor == 0` handling in `IDLE` when `start` is asserted.
+- Kept all port widths and main algorithm structure intact.

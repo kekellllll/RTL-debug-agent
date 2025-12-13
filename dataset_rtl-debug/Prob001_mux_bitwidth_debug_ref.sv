@@ -6,7 +6,7 @@ module RefModule (
   output [7:0] out
 );
 
-  assign out = sel ? a : b;
+  assign out = sel ? b : a;
 
 endmodule
 

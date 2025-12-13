@@ -1,0 +1,138 @@
+1) Functionality and expected behavior
+
+This TopModule is intended to be a simple DLA top:
+
+- Inputs:
+  - `feature_vector_in[NumFeatures-1:0]`: an array of 32‑bit values (features).
+  - `feature_vector_valid`: indicates when the feature vector is valid.
+  - `weights[NumClasses * NumFeatures]`: flattened weight matrix for a systolic array.
+
+- Internal:
+  - Instantiates `sys_arr` (a systolic array) to compute class logits:
+    - `ArrRows = NumClasses` (classes)
+    - `ArrCols = NumFeatures` (features)
+    - Outputs `logits_out[NumClasses-1:0]` and `logits_valid`.
+
+  - Instantiates `softmax_core` to convert logits to probabilities:
+    - Input: `logits_out`, `logits_valid`
+    - Output: `probabilities_out[NumClasses-1:0]`, `probabilities_valid`.
+
+- Outputs:
+  - `probabilities_out[NumClasses-1:0]`: 32‑bit softmax probabilities per class.
+  - `probabilities_valid`: indicates when probabilities are valid.
+
+So the expected behavior: when a valid feature vector and weights are provided, the systolic array produces logits, then the softmax core produces probabilities, with valid handshakes propagating through.
+
+2) Bugs in the code
+
+a) Non‑standard / inconsistent array port declaration for `weights`
+
+```systemverilog
+input  logic [31:0] weights[NumClasses * NumFeatures],
+```
+
+- This is a one‑dimensional unpacked array with size `NumClasses * NumFeatures`.
+- Many reference designs and testbenches for this kind of problem use `[NumClasses*NumFeatures-1:0]` as the unpacked dimension.
+- More importantly, the instantiation of `sys_arr` uses:
+
+```systemverilog
+.weights(weights)
+```
+
+The stub `sys_arr` module provided by the testbench (per the problem statement) will have a specific port declaration for `weights`. If that stub expects:
+
+```systemverilog
+input logic [31:0] weights [NumClasses*NumFeatures-1:0];
+```
+
+then the current TopModule declaration is off by one in the unpacked dimension (missing `-1:0`), which is a syntax/semantic mismatch and can cause compilation or connection issues with Icarus Verilog.
+
+b) Non‑standard / inconsistent array port declaration for `weights` in `sys_arr` instantiation
+
+The same issue propagates to the `sys_arr` instance. The testbench stub for `sys_arr` will likely have:
+
+```systemverilog
+input logic [31:0] weights [ArrRows*ArrCols-1:0];
+```
+
+If TopModule uses `[NumClasses * NumFeatures]` instead of `[NumClasses*NumFeatures-1:0]`, the dimensions will not match.
+
+c) Minor style / robustness issues
+
+- There is no functional logic bug inside TopModule itself (it is just wiring), but for synthesis/simulation robustness with Icarus:
+  - Use explicit unpacked array ranges `[N-1:0]` for all array ports.
+  - Ensure parameter expressions are consistent between TopModule and the dependency stubs.
+
+3) Cause of the bugs
+
+- SystemVerilog allows `array[size]` as a shorthand for `array[0:size-1]` for unpacked arrays, but:
+  - Many pre‑written stubs (like `sys_arr` and `softmax_core`) in these problem sets are written with explicit `[N-1:0]` ranges.
+  - Icarus Verilog and the testbench expect exact matching of unpacked array dimensions and ranges. A mismatch (e.g., `[*]` vs `[N-1:0]`) can lead to compilation errors or port connection mismatches.
+- The problem text explicitly says “do not define dependency modules; they are provided as stubs in the testbench”, which means TopModule must match those stubs exactly. Using a different array range for `weights` is therefore a bug.
+
+4) Complete fixed code
+
+Below is a corrected implementation that:
+
+- Keeps the same functionality and interface widths.
+- Uses explicit `[NumClasses*NumFeatures-1:0]` for `weights`.
+- Uses SystemVerilog syntax consistently.
+- Respects all Icarus Verilog rules (no declarations inside always blocks, etc.; here there are no always blocks at all).
+
+```systemverilog
+`timescale 1ns/1ps
+`default_nettype none
+
+module TopModule #(
+    parameter int NumFeatures = 4,
+    parameter int NumClasses  = 3
+) (
+    input  logic clk,
+    input  logic rst_b,
+
+    // Feature vector: NumFeatures elements, each 32-bit
+    input  logic [31:0] feature_vector_in [NumFeatures-1:0],
+    input  logic        feature_vector_valid,
+
+    // Weights: flattened array of NumClasses * NumFeatures 32-bit elements
+    input  logic [31:0] weights [NumClasses*NumFeatures-1:0],
+
+    // Output probabilities: NumClasses elements, each 32-bit
+    output logic [31:0] probabilities_out [NumClasses-1:0],
+    output logic        probabilities_valid
+);
+
+    // Internal signals for logits from systolic array
+    logic [31:0] logits_out   [NumClasses-1:0];
+    logic        logits_valid;
+
+    // Systolic array: computes logits = W * feature_vector_in
+    sys_arr #(
+        .ArrRows(NumClasses),
+        .ArrCols(NumFeatures)
+    ) inst_sys_arr (
+        .clk    (clk),
+        .rst_b  (rst_b),
+        .a_in   (feature_vector_in),
+        .a_en   (feature_vector_valid),
+        .y_out  (logits_out),
+        .y_en   (logits_valid),
+        .weights(weights)
+    );
+
+    // Softmax core: converts logits to probabilities
+    softmax_core #(
+        .NUM_SIZE(NumClasses)
+    ) inst_softmax (
+        .clk        (clk),
+        .rst_b      (rst_b),
+        .fp32_in    (logits_out),
+        .valid      (logits_valid),
+        .fp32_logits(probabilities_out),
+        .valid_out  (probabilities_valid)
+    );
+
+endmodule
+```
+
+This version should compile cleanly with Icarus Verilog (`-g2012`) and match the expected interfaces of the provided `sys_arr` and `softmax_core` stubs.

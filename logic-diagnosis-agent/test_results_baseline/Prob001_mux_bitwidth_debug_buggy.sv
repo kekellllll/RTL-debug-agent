@@ -1,0 +1,16 @@
+The following Verilog module has one or more bugs. Please identify and fix all bugs:
+
+module TopModule (
+    input        sel,
+    input  [7:0] a,
+    input  [7:0] b,
+    output       out
+);
+
+    assign out = (~sel & a) | (sel & b);
+
+endmodule
+
+Debug this code and provide a corrected implementation. The module should implement an 8-bit wide 2-to-1 multiplexer.
+
+

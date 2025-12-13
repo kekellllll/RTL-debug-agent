@@ -1,0 +1,80 @@
+module TopModule (
+input  logic [31:0] a,
+input  logic [31:0] b,
+input  logic        sel,   // 0: FP_ADD, 1: FP_MULTIPLY
+output logic [31:0] y
+);
+// Results from submodules
+logic [31:0] sum;
+logic [31:0] product;
+// Floating-point adder and multiplier are provided by the testbench
+fp_adder adder (
+.a   (a),
+.b   (b),
+.sum (sum)
+);
+fp_multiplier multiplier (
+.a       (a),
+.b       (b),
+.product (product)
+);
+always_comb begin
+// Default
+y = 32'd0;
+// NaN detection: exponent == 0xFF and mantissa != 0 (check all 23 bits [22:0])
+if ((a[30:23] == 8'hFF && a[22:0] != 23'b0) ||
+(b[30:23] == 8'hFF && b[22:0] != 23'b0)) begin
+y = 32'hFFFFFFFF;  // represent NaN
+end
+// infinity + -infinity = NaN (only for addition)
+else if (sel == 1'b0 &&
+(a == 32'h7F800000 || a == 32'hFF800000) &&
+(b == 32'h7F800000 || b == 32'hFF800000) &&
+(a[31] != b[31])) begin
+y = 32'hFFFFFFFF;
+end
+// Propagate infinities
+else if (a == 32'h7F800000 || a == 32'hFF800000) begin
+y = a;
+end
+else if (b == 32'h7F800000 || b == 32'hFF800000) begin
+y = b;
+end
+// At least one operand has exponent == 0 (could be zero or subnormal)
+else if (a[30:23] == 8'b0 || b[30:23] == 8'b0) begin
+if (sel == 1'b0) begin
+// ADD: if one operand is exactly zero, return the other; else use adder
+if (a[30:23] == 8'b0 && a[22:0] == 23'b0) begin
+// a is +0 or -0
+y = b;
+end
+else if (b[30:23] == 8'b0 && b[22:0] == 23'b0) begin
+// b is +0 or -0
+y = a;
+end
+else begin
+// One or both are subnormal but non-zero: let adder handle it
+y = sum;
+end
+end
+else begin
+// MULTIPLY: if any operand is exactly zero, result must be zero; else use multiplier
+if ((a[30:23] == 8'b0 && a[22:0] == 23'b0) ||
+(b[30:23] == 8'b0 && b[22:0] == 23'b0)) begin
+y = 32'd0;
+end
+else begin
+y = product;
+end
+end
+end
+else begin
+// Normal operation
+case (sel)
+1'b0: y = sum;      // FP_ADD
+1'b1: y = product;  // FP_MULTIPLY
+default: y = 32'hFFFFFFFF;
+endcase
+end
+end
+endmodule : TopModule

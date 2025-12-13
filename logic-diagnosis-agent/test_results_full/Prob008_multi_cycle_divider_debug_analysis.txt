@@ -1,0 +1,130 @@
+`timescale 1ns/1ps
+`default_nettype none
+
+module TopModule #(
+    parameter BITS_PER_STAGE = 3
+)(
+    input  logic        clk,
+    input  logic        rst_b,
+    input  logic        start,
+    input  logic [46:0] dividend,
+    input  logic [23:0] divisor,
+    output logic [23:0] quotient,
+    output logic        done
+);
+    // FSM state
+    typedef enum logic [1:0] { IDLE = 2'b00, DIVIDE = 2'b01, DONE = 2'b10 } state_t;
+    state_t state;
+
+    // Number of stages required to process 24 quotient bits
+    localparam int NUM_STAGES = (24 + BITS_PER_STAGE - 1) / BITS_PER_STAGE;
+
+    // Stage index
+    logic [$clog2(NUM_STAGES)-1:0] bit_index;
+
+    // Working registers (sequential)
+    logic [23:0] curr_quotient;
+    logic [24:0] curr_remainder;
+
+    // Combinational temporaries for one stage
+    logic [23:0] working_quotient;
+    logic [24:0] working_remainder;
+
+    // Iteration count in this stage
+    int iter;
+
+    //------------------------------------------------------------
+    // Sequential logic
+    //------------------------------------------------------------
+    always_ff @(posedge clk or negedge rst_b) begin
+        if (!rst_b) begin
+            done           <= 1'b0;
+            bit_index      <= '0;
+            curr_quotient  <= '0;
+            curr_remainder <= '0;
+            state          <= IDLE;
+        end else begin
+            case (state)
+                IDLE: begin
+                    done      <= 1'b0;
+                    bit_index <= '0;
+
+                    if (start) begin
+                        // Initialize: remainder = high 24 bits of dividend (align 47/24),
+                        // quotient register = low 24 bits which will be refined.
+                        curr_remainder <= {1'b0, dividend[46:23]}; // 24 MSBs into [24:1]
+                        curr_quotient  <= dividend[22: -1 + 24 ? 0 : 0]; // placeholder to keep syntax, will be overridden below
+                        curr_quotient  <= dividend[22: -1 + 24 ? 0 : 0];
+                        // Correct initialization: 24 LSBs of dividend
+                        curr_quotient  <= dividend[23:0];
+                        state          <= DIVIDE;
+                    end
+                end
+
+                DIVIDE: begin
+                    // Latch results from the combinational divider stage
+                    curr_remainder <= working_remainder;
+                    curr_quotient  <= working_quotient;
+
+                    if (bit_index == NUM_STAGES - 1) begin
+                        state <= DONE;
+                    end else begin
+                        bit_index <= bit_index + 1'b1;
+                    end
+                end
+
+                DONE: begin
+                    done  <= 1'b1;
+                    state <= IDLE;
+                end
+
+                default: begin
+                    state <= IDLE;
+                end
+            endcase
+        end
+    end
+
+    //------------------------------------------------------------
+    // Combinational logic: one multi-bit division stage
+    //------------------------------------------------------------
+    always_comb begin
+        // Default pass-through
+        working_remainder = curr_remainder;
+        working_quotient  = curr_quotient;
+
+        // How many bits to process this stage
+        iter = BITS_PER_STAGE;
+        if (bit_index == NUM_STAGES - 1) begin
+            // Last stage may need fewer iterations
+            iter = 24 - (BITS_PER_STAGE * bit_index);
+        end
+
+        // Perform 'iter' restoring-division steps on the 24-bit quotient
+        for (int i = 0; i < iter; i = i + 1) begin
+            // Shift remainder left and bring in next dividend/quotient bit from MSB side
+            working_remainder = working_remainder << 1;
+            working_remainder[0] = working_quotient[23];
+
+            // Shift quotient left (room for next quotient bit at LSB)
+            working_quotient = working_quotient << 1;
+
+            // Compare and subtract (treat divisor as 25-bit with leading 0)
+            if (working_remainder >= {1'b0, divisor}) begin
+                // Subtract divisor from remainder's lower 24 bits
+                working_remainder[23:0] = working_remainder[23:0] - divisor;
+                // Set new quotient bit to 1
+                working_quotient[0] = 1'b1;
+            end else begin
+                // New quotient bit is 0
+                working_quotient[0] = 1'b0;
+            end
+        end
+    end
+
+    // Output is the refined quotient register
+    assign quotient = curr_quotient;
+
+endmodule
+
+`default_nettype wire

@@ -1,7 +1,6 @@
-`timescale 1ns/1ps
-`default_nettype none
+The following Verilog module has one or more bugs. Please identify and fix all bugs:
 
-module RefModule (
+module TopModule (
     input        clk,
     input        reset,
     input        in,
@@ -24,11 +23,10 @@ module RefModule (
     end
 
     always @(*) begin
-        next_state = S0; // Default assignment to avoid latches
         case (state)
-            S0: next_state = state_t'(in ? S1 : S0);
-            S1: next_state = state_t'(in ? S2 : S0);
-            S2: next_state = state_t'(in ? S2 : S0);
+            S0: next_state = in ? S1 : S0;
+            S1: next_state = in ? S2 : S0;
+            S2: next_state = in ? S2 : S0;
         endcase
     end
 
@@ -37,5 +35,7 @@ module RefModule (
     end
 
 endmodule
+
+Debug this code and provide a corrected implementation. The FSM should detect a sequence of two consecutive '1's on the input and assert the output when in state S2.
 
 
